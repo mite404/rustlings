@@ -483,6 +483,121 @@ Both must be satisfied. You can have ownership without mutability (immutable par
 
 ---
 
+## Why Ownership & Borrowing Matter: The Memory Layout Story
+
+**The Problem: Heap Data Without Rules**
+
+Stack data (integers, booleans) can be copied freely—each copy is independent and safe. But heap data (String, Vec) is different:
+
+```rust
+// Without ownership rules:
+let s1 = String::from("hello");  // s1 points to heap memory
+let s2 = s1;                     // What do we copy? Just the pointer?
+// Now s1 and s2 point to the SAME heap memory!
+// When s1 leaves scope: drop(s1) frees the heap
+// When s2 leaves scope: drop(s2) tries to free SAME memory
+// → CRASH (double free)
+```
+
+**Why the difference?** Because of memory layout:
+
+| Data | Layout | Issue |
+|------|--------|-------|
+| `u32` | Value stored directly on stack | Copying is cheap & safe. Each copy independent. |
+| `String` | Metadata on stack + data on heap | Copying just the pointer = multiple owners of same heap memory |
+| `Vec<T>` | Metadata on stack + data on heap | Same problem: multiple pointers = danger |
+
+**Rust's Solution: Ownership**
+
+Only ONE owner can exist for heap data at a time:
+
+```rust
+let s1 = String::from("hello");  // s1 OWNS the heap memory
+let s2 = s1;                     // Ownership MOVES to s2
+// s1 is invalid now—can't use it
+// Only s2 owns the heap. When s2 leaves scope: ONE drop() call.
+
+println!("{}", s1);  // ❌ ERROR
+println!("{}", s2);  // ✅ OK
+```
+
+This prevents double free because ownership is clear and exclusive.
+
+**Borrowing: Multiple Readers, No Ownership Transfer**
+
+If you want the original owner to keep the data but let others *look at* it:
+
+```rust
+let s1 = String::from("hello");
+let s2 = &s1;  // BORROW: s1 still owns it, s2 can read
+let s3 = &s1;  // Another borrow: s1 still owns it
+
+println!("{}", s1);  // ✅ s1 still owns
+println!("{}", s2);  // ✅ s2 reading through reference
+println!("{}", s3);  // ✅ s3 reading through reference
+// Only s1's drop() runs when scope ends
+```
+
+**Visual: Why Both Are Needed**
+
+```
+Stack data (no ownership needed):
+let x = 5;     let y = x;
+┌─────┐        ┌─────┐
+│ x=5 │        │ y=5 │  (independent, both stay valid)
+└─────┘        └─────┘
+
+Heap data WITH ownership:
+let s1 = String::from("hello")    let s2 = s1
+┌──────────────┐                  ┌──────────────┐
+│ s1: ptr ─────┼──→ [heap]        │ s2: ptr ─────┼──→ [heap]
+└──────────────┘                  └──────────────┘
+(s1 valid)                        (s1 INVALID, ownership moved)
+
+Heap data WITH borrowing:
+let s1 = String::from("hello")    let s2 = &s1
+┌──────────────┐                  ┌──────────┐
+│ s1: ptr ─────┼──→ [heap]        │ s2: &ptr │
+└──────────────┘                  └──────────┘
+(s1 still owns, s2 just reads)
+```
+
+**Mutable Borrowing: Protecting Data Integrity**
+
+If you borrow mutably (allow modifications), Rust prevents other readers from existing:
+
+```rust
+let mut s1 = String::from("hello");
+let s2 = &s1;           // Immutable borrow
+s1.push_str(" world");  // ❌ ERROR: can't mutate while s2 borrows
+println!("{}", s2);     // s2 expects "hello", not "hello world"!
+```
+
+**Why?** If `s1` mutates while `s2` is reading, `s2` sees inconsistent data.
+
+**Stack Data: No Ownership Problem**
+
+```rust
+let x: u32 = 5;
+let y = x;    // Copy the value (cheap, 4 bytes)
+let z = x;    // Copy again (still valid)
+// All independent. Stack is cleaned up automatically (LIFO).
+// No heap = no need for ownership.
+```
+
+**Key Insight:**
+
+Ownership and borrowing exist *specifically because of heap memory*:
+
+- **Heap = shared resource** that could have multiple pointers
+- **Ownership = exactly ONE responsible owner** (prevents double free)
+- **Borrowing = temporary access** without transferring responsibility
+- **Stack = no problem** (automatic cleanup, cheap copies, independent)
+
+The rules aren't arbitrary—they're Rust's solution to preventing memory bugs that plague languages like C. Every rule traces back to: "If multiple owners exist for heap data, it crashes."
+
+---
+
 ## Structs: Custom Data Structures
 
 **What is a struct?**
@@ -605,6 +720,38 @@ Both the **stack** and **heap** are regions of your program's memory (RAM). The 
 | **Allocation** | Automatic (variable declarations) | Manual (you request memory) |
 | **Cleanup** | Automatic (scope exit) | Automatic via Rust ownership (drop trait) |
 
+**String vs &str: A Critical Distinction**
+
+This is one of the most important distinctions in Rust:
+
+| Aspect | `String` | `&str` |
+|--------|----------|--------|
+| **Ownership** | Owns the data | Borrowed reference (no ownership) |
+| **Mutability** | Can be mutable (`mut String`) | Always immutable |
+| **Memory** | Heap (data) + Stack (metadata: ptr, len, capacity) | Just a reference (pointer + length on stack) |
+| **Size at compile time** | Unknown (grows/shrinks at runtime) | Pointer size is known (always 16 bytes: 8-byte pointer + 8-byte length) |
+| **Example** | `String::from("hello")` | `"hello"` or `&owned_string[..]` |
+
+**The key insight:** `String` owns data and can change it. `&str` borrows a reference to data (whether on the heap, in the binary, or anywhere) and cannot change it. Immutability isn't because it's "stack data"—it's because **it's a borrowed reference, and borrowed references can't mutate**.
+
+```rust
+let literal = "hello";                       // &str → pointer to binary's read-only section
+let owned = String::from("hello");           // String → Stack (metadata) + Heap (data)
+let borrowed = &owned[0..5];                 // &str → borrowed reference to heap data
+
+// You can modify owned:
+let mut s = String::from("hello");
+s.push_str(" world");  // ✓ owns the data, so can mutate
+
+// You cannot modify borrowed:
+borrowed.push_str("!");  // ✗ error, &str is immutable (borrowed)
+```
+
+**Why `String` when you could use `&str`?**
+
+- **`String`:** Use when you need to own the data and modify it (user input, building strings dynamically)
+- **`&str`:** Use when you're passing references around (function parameters, avoiding copies)
+
 **Visual memory layout:**
 
 ```
@@ -650,7 +797,180 @@ Rust uses the **drop** trait to automatically clean up heap memory when the owne
 }  // s goes out of scope, drop(s) runs, heap memory is freed
 ```
 
+**What data lives where (the specific rule):**
+
+| Data Type | Where? | Why? | Size Known? |
+|-----------|--------|------|-------------|
+| `u32`, `i64`, `bool`, `f64` | **Stack** | Fixed size at compile time | ✅ Yes (4, 8, 1, 8 bytes) |
+| `char` | **Stack** | Always 4 bytes | ✅ Yes |
+| `[T; N]` (fixed array) | **Stack** | Size is compile-time constant | ✅ Yes |
+| `&T` (reference/pointer) | **Stack** | Always 8 bytes (address) | ✅ Yes |
+| `String` | **Stack** (metadata) + **Heap** (data) | Size can grow at runtime | ❌ No |
+| `Vec<T>` | **Stack** (metadata) + **Heap** (data) | Size can grow at runtime | ❌ No |
+| `Box<T>` | **Stack** (pointer) + **Heap** (data) | Heap allocation of any type | ❌ No |
+| String literals `"hello"` | **Binary's read-only section** | Compile-time constant (embedded in binary) | ✅ Yes |
+
+**The core principle:**
+- **If size is known at compile time** → Stack (fast & predictable)
+- **If size is unknown/variable at runtime** → Heap (flexible & slower)
+
+**String literal special case:**
+String literals (`"hello"`) are **NOT** stored on the heap—they're embedded directly in your binary's read-only data section. But when you do `String::from("hello")`, you create a *new* String struct that allocates heap memory and copies the literal's data into it:
+
+```rust
+let literal = "hello";                    // Stack: pointer to binary read-only section
+let heap_string = String::from("hello");  // Stack: metadata (ptr, len, capacity)
+                                          // Heap: copy of "hello" (allocated at runtime)
+```
+
 **Key insight:** The stack/heap distinction exists because **simple data is fixed-size** (put it on the fast stack) while **complex data is variable-size** (put it on the flexible heap). Rust makes you aware of which is which—if you're moving data that uses the heap, ownership rules apply. If it's pure stack data (integers, booleans), copying is free because the compiler can just duplicate the simple value.
+
+---
+
+## Ownership, Mutability, and Memory Location Are Independent
+
+**Critical realization:** These three concepts are completely separate in Rust:
+
+| Concept | Question | Options |
+|---------|----------|---------|
+| **Ownership** | "Who controls this data?" | One owner (for heap) OR borrowed (&) |
+| **Mutability** | "Can the owner modify it?" | `mut` (yes) OR immutable (no) |
+| **Memory location** | "Where does it live?" | Stack OR Heap |
+
+These choices are **orthogonal**—you decide each one independently:
+
+```rust
+// Owned, immutable, on heap
+let s = String::from("hello");
+
+// Owned, MUTABLE, on heap
+let mut s = String::from("hello");
+
+// Owned, immutable, on stack
+let x = 5i32;
+
+// Owned, MUTABLE, on stack
+let mut x = 5i32;
+
+// Borrowed immutable, from anywhere
+let ref_s = &s;
+let ref_x = &x;
+
+// Borrowed MUTABLE, from anywhere
+let mut_ref_s = &mut s;
+let mut_ref_x = &mut x;
+```
+
+**Why this matters:** You might have owned data (a `String`) that's immutable. You might have borrowed data that's mutable. You might have stack data that's mutable. Don't conflate these concepts—they're independent decisions.
+
+**Example:** In strings2, `word` is a `String` (owned), but it doesn't need to be `mut` to pass `&word` to a function expecting `&str`. The ownership and mutability are separate from the type mismatch you're solving.
+
+---
+
+## Strings in Rust: The Easy Version
+
+There are two types of text in Rust:
+
+**`&str` (string slice) — Read-only borrowing**
+- It's text you're *borrowing* to look at
+- You can't change it
+- Examples: `"hello"`, borrowed text from a `String`
+
+```rust
+let text = "hello";  // This is &str
+```
+
+**`String` — You own it**
+- It's text *you own*
+- You can change it if you add `mut`
+- Examples: text from user input, text you're building
+
+```rust
+let mut text = String::from("hello");
+text.push_str(" world");  // ✓ Can change it
+```
+
+**Why the rule about borrowing?**
+
+Imagine you lend a friend a comic book page to read. While they're reading it, you start erasing and rewriting it. That's confusing!
+
+So Rust says: **"If someone's reading something, you can't change it while they're reading."**
+
+That's why borrowed text (`&str`) is always read-only.
+
+**The rule:** Borrow = read-only. Own = can change.
+
+---
+
+## String Methods and Operations
+
+**Common string methods:**
+
+| Method | Input | Output | What it does | Example |
+|--------|-------|--------|--------------|---------|
+| `.trim()` | `&str` | `&str` | Removes whitespace from both ends | `"  hello  ".trim()` → `"hello"` |
+| `.replace(old, new)` | `&str`, `&str` | `String` | Replaces all occurrences of a substring | `"cars are cool".replace("cars", "balloons")` → `"balloons are cool"` |
+| `.to_string()` | (any type with ToString trait) | `String` | Converts to an owned String | `"hello".to_string()` or `42.to_string()` |
+| `.to_lowercase()` | `&str` | `String` | Converts to lowercase | `"HELLO".to_lowercase()` → `"hello"` |
+| `.to_uppercase()` | `&str` | `String` | Converts to uppercase | `"hello".to_uppercase()` → `"HELLO"` |
+
+**Key insight:** Notice the difference in return types. Methods that **return `&str`** (like `.trim()`) are just borrowing a slice of the original string—they don't allocate new memory. Methods that **return `String`** (like `.replace()`, `.to_lowercase()`) create new owned strings on the heap.
+
+**String concatenation with `+`:**
+
+The `+` operator works with strings, but it has specific rules due to ownership:
+
+```rust
+// Pattern: owned String + borrowed &str = new String
+let result = String::from("Hello") + " world";
+let result = "Hello".to_string() + " world";  // Same thing
+```
+
+Why the asymmetry? The `+` operator **consumes** (takes ownership of) the left side to build a new String. The right side just needs to be readable, so a borrowed `&str` is fine.
+
+```rust
+let s1 = String::from("Hello");
+let s2 = String::from(" world");
+// ❌ let result = s1 + s2;  // ERROR: can't use owned String on right side
+// ✓ let result = s1 + &s2;  // OK: borrow s2
+```
+
+**`to_string()` vs `String::from()`:**
+
+Both convert `&str` to `String`, but they work on different types:
+
+```rust
+// String::from() — specifically for &str and string literals
+String::from("hello")
+String::from(&my_str)
+
+// .to_string() — works on any type with the ToString trait
+"hello".to_string()       // &str → String
+42.to_string()            // i32 → "42"
+true.to_string()          // bool → "true"
+```
+
+For `&str`, both work identically. Choose based on readability.
+
+**String vs &str in method return types:**
+
+When a function returns `&str`, it's returning a borrowed slice—no new heap allocation. When it returns `String`, it's returning a newly owned value on the heap:
+
+```rust
+fn trim_me(input: &str) -> &str {
+    input.trim()  // Borrows a slice, no new allocation
+}
+
+fn compose_me(input: &str) -> String {
+    input.to_string() + " world!"  // Creates new String on heap
+}
+
+fn replace_me(input: &str) -> String {
+    input.replace("cars", "balloons")  // Creates new String on heap
+}
+```
+
+**Key insight:** The return type tells you about memory—`&str` means "I'm giving you a view into existing data," while `String` means "I've created new data that you own."
 
 ---
 
@@ -844,6 +1164,129 @@ impl Camera {
 ```
 
 You can even have methods in different files! The separation of data and behavior gives you more organizational freedom.
+
+---
+
+## Enums: One of Many Variants
+
+**What is an enum?**
+
+An **enum** (enumeration) is a type that can be **one of several possible variants**. Unlike a struct which bundles multiple fields together, an enum says "this value is either this variant, or that variant, or this other variant—but only ONE at a time."
+
+**The three enum variants (matching how you define them):**
+
+Enums can hold different *shapes* of data. The syntax you use to define each variant affects how you later destructure it:
+
+| Variant Type | Definition | Destructuring | Use Case |
+|--------------|-----------|----------------|----------|
+| **Unit variant** | `Quit` | `Message::Quit` | No data attached |
+| **Struct variant** | `Move { x: i32, y: i32 }` | `Message::Move { x, y }` | Named fields for clarity |
+| **Tuple variant** | `Write(String)` or `ChangeColor(u8, u8, u8)` | `Message::Write(text)` or `Message::ChangeColor(r, g, b)` | Unnamed fields; meaning is obvious from context or type |
+
+**Full example:**
+
+```rust
+enum Message {
+    Quit,                              // Unit variant — no data
+    Move { x: i32, y: i32 },           // Struct variant — named fields
+    Write(String),                     // Tuple variant — single unnamed field
+    ChangeColor(u8, u8, u8),          // Tuple variant — three unnamed fields
+}
+```
+
+**Key insight about struct vs tuple syntax:**
+
+The difference between `Move { x: i32, y: i32 }` and `ChangeColor(u8, u8, u8)` isn't about the *types* of data—it's about **whether you name the fields**:
+
+- **Struct syntax `{}`** = "I want to name these fields for clarity"
+  - `Move { x: i32, y: i32 }` — clearly coordinates
+  - Destructure: `Message::Move { x, y }`
+
+- **Tuple syntax `()`** = "The meaning is obvious from context or type"
+  - `ChangeColor(u8, u8, u8)` — clearly RGB (three u8s in order)
+  - Destructure: `Message::ChangeColor(r, g, b)`
+
+If you had a struct like `Point { x: i32, y: i32 }` and used it in an enum, the enum only sees it as one unnamed thing:
+
+```rust
+enum Message {
+    Move(Point),  // ← Tuple variant! One unnamed field (happens to be a Point)
+}
+
+// Destructure:
+Message::Move(point) => {  // Extract the Point, but Move itself is a tuple variant
+    println!("{}", point.x);  // The Point's internal structure is separate
+}
+```
+
+**Pattern matching and destructuring:**
+
+When you use a `match` expression on an enum, the **pattern mirrors the variant's structure**:
+
+```rust
+match msg {
+    Message::Quit => {
+        // Unit variant — nothing to destructure
+        println!("Quit");
+    }
+
+    Message::Move { x, y } => {
+        // Struct variant — destructure with { } to extract named fields
+        println!("Move to ({}, {})", x, y);
+    }
+
+    Message::Write(text) => {
+        // Tuple variant — destructure with ( ) to extract the value
+        println!("Write: {}", text);
+    }
+
+    Message::ChangeColor(r, g, b) => {
+        // Tuple variant with multiple values — extract all three
+        println!("RGB({}, {}, {})", r, g, b);
+    }
+}
+```
+
+**Real-world concrete example: State machine**
+
+Imagine you're building a state machine for a UI. Here's an enum representing different actions:
+
+```rust
+enum Action {
+    Click,                          // Just a marker — no data needed
+    Resize { width: u32, height: u32 },  // Named fields — clear what they represent
+    Input(String),                  // Single value — a text input
+    SetColor(u8, u8, u8),          // Three values — RGB
+}
+
+// Handling actions:
+match action {
+    Action::Click => handle_click(),
+    Action::Resize { width, height } => resize_window(width, height),
+    Action::Input(text) => process_input(text),
+    Action::SetColor(r, g, b) => apply_color(r, g, b),
+}
+```
+
+**Why enums matter:**
+
+Without enums, you'd need separate types for each action (separate structs), making it hard to pass them around uniformly:
+
+```rust
+// ❌ Without enums — each is a different type
+struct ClickAction;
+struct ResizeAction { width: u32, height: u32 }
+struct InputAction(String);
+
+// Can't easily put these in one collection or function
+// let actions: Vec<???> = vec![...];  // What type?
+
+// ✓ With enums — all the same type
+enum Action { Click, Resize { ... }, Input(...), ... }
+let actions: Vec<Action> = vec![...];  // Works!
+```
+
+**Key insight:** Enums are Rust's way of saying "a value is one of these possibilities." The syntax you use to define each variant—unit, struct, or tuple—tells you exactly how to destructure it when matching. This is one of Rust's most powerful features for representing different states or variants of data.
 
 ---
 
