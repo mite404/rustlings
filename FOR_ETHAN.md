@@ -540,7 +540,7 @@ println!("{}", s3);  // ✅ s3 reading through reference
 
 **Visual: Why Both Are Needed**
 
-```
+```text
 Stack data (no ownership needed):
 let x = 5;     let y = x;
 ┌─────┐        ┌─────┐
@@ -699,6 +699,7 @@ const p: Point = [3.14, 2.71];
 ```
 
 **Key insight:** If you've been using TypeScript interfaces or types to organize data, you already understand what a Rust struct does. The main differences:
+
 - TypeScript interfaces are **compile-time only** (they disappear after compilation)
 - Rust structs are **runtime concepts** (baked into the compiled binary)
 - Rust gives you three flavors for different scenarios; TypeScript mostly just gives you objects
@@ -754,7 +755,7 @@ borrowed.push_str("!");  // ✗ error, &str is immutable (borrowed)
 
 **Visual memory layout:**
 
-```
+```text
 STACK (organized, fast)          HEAP (flexible, slower)
 ┌─────────────────────┐          ┌──────────────────────────┐
 │ x: 5                │          │                          │
@@ -771,6 +772,7 @@ STACK (organized, fast)          HEAP (flexible, slower)
 When you declare a simple variable like `let x: i32 = 5;`, the value `5` lives **directly on the stack**. It's stored right there, ready to access instantly.
 
 When you create a `String` like `let y = String::from("hello");`, here's what happens:
+
 1. The **metadata** (pointer, capacity, length) goes on the **stack**
 2. The **actual text data** (`"hello"`) goes on the **heap**
 3. The pointer on the stack points to the heap location
@@ -811,6 +813,7 @@ Rust uses the **drop** trait to automatically clean up heap memory when the owne
 | String literals `"hello"` | **Binary's read-only section** | Compile-time constant (embedded in binary) | ✅ Yes |
 
 **The core principle:**
+
 - **If size is known at compile time** → Stack (fast & predictable)
 - **If size is unknown/variable at runtime** → Heap (flexible & slower)
 
@@ -872,6 +875,7 @@ let mut_ref_x = &mut x;
 There are two types of text in Rust:
 
 **`&str` (string slice) — Read-only borrowing**
+
 - It's text you're *borrowing* to look at
 - You can't change it
 - Examples: `"hello"`, borrowed text from a `String`
@@ -881,6 +885,7 @@ let text = "hello";  // This is &str
 ```
 
 **`String` — You own it**
+
 - It's text *you own*
 - You can change it if you add `mut`
 - Examples: text from user input, text you're building
@@ -1011,6 +1016,7 @@ package.get_fees(3);  // Rust converts this to: Package::get_fees(&package, 3)
 ```
 
 Inside the method, you have access to:
+
 1. **`&self`** = the entire Package struct (all its fields)
 2. **Explicit arguments** = what you pass in the parentheses
 
@@ -1124,6 +1130,7 @@ let boxed = camera.into_box(); // ✓ Takes ownership—camera no longer exists 
 **Analogy: The Film Camera Manual**
 
 Think of it this way:
+
 - **Struct** = Your camera (physical object with properties: megapixels, battery, lens)
 - **impl block** = The instruction manual that comes with it
 - **Methods** = The specific instructions ("How to take a photo", "How to charge")
@@ -1270,7 +1277,8 @@ match action {
 
 **Why enums matter:**
 
-Without enums, you'd need separate types for each action (separate structs), making it hard to pass them around uniformly:
+Without enums, you'd need separate types for each action (separate structs), making it
+hard to pass them around uniformly:
 
 ```rust
 // ❌ Without enums — each is a different type
@@ -1286,7 +1294,10 @@ enum Action { Click, Resize { ... }, Input(...), ... }
 let actions: Vec<Action> = vec![...];  // Works!
 ```
 
-**Key insight:** Enums are Rust's way of saying "a value is one of these possibilities." The syntax you use to define each variant—unit, struct, or tuple—tells you exactly how to destructure it when matching. This is one of Rust's most powerful features for representing different states or variants of data.
+**Key insight:** Enums are Rust's way of saying "a value is one of these possibilities." The
+syntax you use to define each variant—unit, struct, or tuple—tells you exactly how to destructure
+it when matching. This is one of Rust's most powerful features for representing different states
+or variants of data.
 
 ---
 
@@ -1294,7 +1305,9 @@ let actions: Vec<Action> = vec![...];  // Works!
 
 **What is `.map()`?**
 
-`.map()` is a universal functional programming pattern. It takes a transformation function and applies it to every element, producing a new collection with transformed values. The concept is identical across languages—only the syntax differs.
+`.map()` is a universal functional programming pattern. It takes a transformation function and
+applies it to every element, producing a new collection with transformed values. The concept
+is identical across languages—only the syntax differs.
 
 ```typescript
 // TypeScript
@@ -1325,4 +1338,112 @@ let iter = vec![1, 2, 3].iter().map(|x| x + 1);  // Nothing happens yet
 let result: Vec<i32> = iter.collect();             // NOW it transforms
 ```
 
-**Key insight:** `.map()` is about **transforming every element uniformly**. It's the functional alternative to manual loops. In Rust, the pattern is always: iterator → transformation → `.collect()`.
+**Key insight:** `.map()` is about **transforming every element uniformly**. It's the functional
+alternative to manual loops. In Rust, the pattern is always: iterator → transformation → `.collect()`.
+
+## Modules and `pub use`: Creating API Boundaries [L1329-end]
+
+The `pub use` statement is a **re-export** tool that decouples your internal code organization
+from your public API. Instead of forcing users to know your folder structure, you can flatten
+and rename exports to create a cleaner interface.
+
+Imagine you're building a game engine library with internal modules (rendering/graphics,
+physics/collision, audio/sound). Without `pub use`, users write verbose imports tied to
+your internals: `use my_game_engine::rendering::graphics::Renderer`. If you reorganize
+internally, their code breaks. With `pub use` at the library's root level, users import
+cleanly: `use my_game_engine::Renderer`. You can reorganize your internal modules
+freely—users never know or care where things actually live. The `as` keyword adds semantic
+clarity (like `pub use fruits::PEAR as fruit`) when renaming imports.
+
+```rust
+// # Internal structure (hidden from users)
+// my_game_engine/
+// ├── rendering/graphics.rs → Renderer
+// ├── physics/collision.rs → CollisionDetector
+// └── audio/sound.rs → SoundEngine
+
+// # Public API (via pub use aliases)
+use rendering::graphics::Renderer;      // Render lives in rendering/graphics
+use physics::collision::CollisionDetector;  // CollisionDetector lives in physics
+use audio::sound::SoundEngine;          // Users just import the top-level names
+```
+
+**Key insight:** `pub use` is about **separating your internal architecture from your public API**. It's a stability tool—you can refactor internals without breaking user code, and users get a clean, discoverable interface instead of navigating your module hierarchy.
+
+## HashMap vs Map: Key-Value Collections [L1372-end]
+
+HashMap (Rust) and Map (TypeScript) are conceptually the same—both are key-value stores optimized for lookups. The key difference is that Rust's HashMap is **type-strict** (all keys and values must be the same type), while TypeScript's Map is flexible. Both have their own specialized methods instead of using array methods like `.pop()` or `.push()`.
+
+**TypeScript Map methods:**
+```javascript
+map.set(key, value)      // Add or update entry
+map.get(key)             // Retrieve value (returns undefined if not found)
+map.delete(key)          // Remove entry
+map.has(key)             // Check if key exists
+map.clear()              // Remove all entries
+map.size                 // Get number of entries
+```
+
+**Rust HashMap methods:**
+```rust
+map.insert(key, value)   // Add or update entry (returns old value)
+map.get(key)             // Retrieve value (returns Option<&V>)
+map.remove(key)          // Remove entry (returns Option<V>)
+map.contains_key(key)    // Check if key exists
+map.clear()              // Remove all entries
+map.len()                // Get number of entries
+map.entry(key).or_insert(default)  // Conditional add (Rust-specific)
+```
+
+**Key insight:** Both use **specialized methods for key-based lookups** instead of sequential operations. The `.entry()` method in Rust is particularly powerful—it's a concise way to add a default value only if the key is missing, avoiding redundant lookups.
+
+## Tricky Patterns: Closures, String Borrowing, and Numeric Types [L1399-end]
+
+Three concepts that trip up learners working with functional patterns and enums:
+
+**1. Closure syntax vs match arrow:**
+
+Closures use pipes `| |` (not `=>`). This is different from `match` which uses `=>`:
+
+```rust
+match command {
+    Command::Uppercase => { /* ... */ }  // match uses =>
+}
+
+collection.into_iter().map(|item| transform(item))  // closure uses | |
+```
+
+In a closure like `.map(|n| n + 1)`, the `|n|` extracts the parameter, and what comes after is the body.
+
+**2. String `+` operator requires understanding when to borrow:**
+
+The `+` operator works with `String + &str`. Here's where it gets confusing:
+- `"bar"` is already `&str` (string literals are automatically borrowed)
+- `"bar".repeat(n)` returns a **`String`** (owned), so you need `&` to make it compatible
+
+```rust
+let s = String::from("foo");
+s + "bar"                    // ✓ "bar" is already &str
+s + &"bar".repeat(3)         // ✓ & converts String to &str
+// Result: "foobarbarbar"
+```
+
+**3. Numeric types: `usize` and when to use them:**
+
+`usize` is an unsigned integer for sizes and counts. When destructuring an enum variant like `Command::Append(usize)`, the extracted variable holds that count:
+
+```rust
+enum Command {
+    Append(usize),  // Holds a number representing "repeat this N times"
+}
+
+match command {
+    Command::Append(n) => {  // n is now a usize (e.g., 3, 5, 10)
+        // Use n as "how many times to repeat"
+    }
+}
+```
+
+Other numeric types: `u8` (0–255, like RGB), `u32` (general), `i32` (negative allowed).
+
+**Key insight:** Functional patterns (closures, `.map()`, `.collect()`) combined with enum extraction create the most idiomatically Rust code. But pay attention to type details—especially `&` for borrowing and understanding what type each method returns.
