@@ -481,6 +481,8 @@ In the first, ownership moves. In the second, it doesn't—you're just borrowing
 
 Both must be satisfied. You can have ownership without mutability (immutable parameter), or borrowing with mutability (`&mut`), but the rules are always: check ownership first, then check mutability permission.
 
+**Note on `ref` in pattern matching:** When destructuring with `match` or `if let`, you can borrow during the destructuring process using the `ref` keyword instead of applying `&` before the value. See the **Borrowing in Pattern Matching: `ref` keyword** section under Options for details and examples.
+
 ---
 
 ## Why Ownership & Borrowing Matter: The Memory Layout Story
@@ -1375,6 +1377,7 @@ use audio::sound::SoundEngine;          // Users just import the top-level names
 HashMap (Rust) and Map (TypeScript) are conceptually the same—both are key-value stores optimized for lookups. The key difference is that Rust's HashMap is **type-strict** (all keys and values must be the same type), while TypeScript's Map is flexible. Both have their own specialized methods instead of using array methods like `.pop()` or `.push()`.
 
 **TypeScript Map methods:**
+
 ```javascript
 map.set(key, value)      // Add or update entry
 map.get(key)             // Retrieve value (returns undefined if not found)
@@ -1385,6 +1388,7 @@ map.size                 // Get number of entries
 ```
 
 **Rust HashMap methods:**
+
 ```rust
 map.insert(key, value)   // Add or update entry (returns old value)
 map.get(key)             // Retrieve value (returns Option<&V>)
@@ -1397,53 +1401,840 @@ map.entry(key).or_insert(default)  // Conditional add (Rust-specific)
 
 **Key insight:** Both use **specialized methods for key-based lookups** instead of sequential operations. The `.entry()` method in Rust is particularly powerful—it's a concise way to add a default value only if the key is missing, avoiding redundant lookups.
 
-## Tricky Patterns: Closures, String Borrowing, and Numeric Types [L1399-end]
+## Options: Representing Values That May Not Exist
 
-Three concepts that trip up learners working with functional patterns and enums:
+**What is an Option?**
 
-**1. Closure syntax vs match arrow:**
-
-Closures use pipes `| |` (not `=>`). This is different from `match` which uses `=>`:
+`Option` is a **built-in enum** from Rust's standard library that represents "a value that may or may not exist." Every `Option` is either `Some(value)` or `None`. It's Rust's way of avoiding "null reference" crashes—instead of silently having `null`, you explicitly handle the possibility of absence.
 
 ```rust
-match command {
-    Command::Uppercase => { /* ... */ }  // match uses =>
+enum Option<T> {
+    Some(T),  // There is a value (of type T)
+    None,     // There is no value
 }
-
-collection.into_iter().map(|item| transform(item))  // closure uses | |
 ```
 
-In a closure like `.map(|n| n + 1)`, the `|n|` extracts the parameter, and what comes after is the body.
+**The Mailbox Analogy: Understanding Option Visually**
 
-**2. String `+` operator requires understanding when to borrow:**
+Think of `Option` like a mailbox:
 
-The `+` operator works with `String + &str`. Here's where it gets confusing:
-- `"bar"` is already `&str` (string literals are automatically borrowed)
-- `"bar".repeat(n)` returns a **`String`** (owned), so you need `&` to make it compatible
+- **`Vec<i8>`** is the mailbox with letters inside
+- **`.pop()`** opens the mailbox and hands you a sealed envelope
+- **The envelope says either:**
+  - "Here's your letter (Some value)" — the mailbox had something
+  - "Empty (None)" — the mailbox was empty
+- **You must open the envelope to see what's inside**
+
+When you call `.pop()` on `Vec<Option<i8>>`, you get a **nested envelope**: an outer envelope from `.pop()` (which might be empty) containing an inner envelope that's already an `Option<i8>`. This is why you see `Option<Option<i8>>`.
+
+**Why this matters:**
+
+`Option` is Rust's way of making "nothing" explicit in the type system. Instead of returning a special number like `-1` or `null` (which can cause bugs), Rust forces you to handle both cases: the value existing and the value not existing. The compiler won't let you forget.
+
+**Key insight:** `Option` is NOT special syntax—it's just a regular enum with two variants. The only magic is that Rust's compiler lets you avoid writing `Option::` in many contexts.
+
+**Borrowing in Pattern Matching: `ref` keyword**
+
+When destructuring an `Option` (or any value) with `match` or `if let`, you can use the `ref` keyword to borrow the value instead of moving it. This is especially useful when the value contains ownership data (like a struct containing a `String`):
 
 ```rust
-let s = String::from("foo");
-s + "bar"                    // ✓ "bar" is already &str
-s + &"bar".repeat(3)         // ✓ & converts String to &str
-// Result: "foobarbarbar"
-```
-
-**3. Numeric types: `usize` and when to use them:**
-
-`usize` is an unsigned integer for sizes and counts. When destructuring an enum variant like `Command::Append(usize)`, the extracted variable holds that count:
-
-```rust
-enum Command {
-    Append(usize),  // Holds a number representing "repeat this N times"
+// Without ref: moves the value out
+if let Some(p) = optional_point {
+    // p is MOVED, optional_point is partially invalidated
 }
 
-match command {
-    Command::Append(n) => {  // n is now a usize (e.g., 3, 5, 10)
-        // Use n as "how many times to repeat"
+// With ref: borrows the value
+if let Some(ref p) = optional_point {
+    // p is a BORROWED REFERENCE, optional_point stays intact
+    println!("Coordinates: {},{}", p.x, p.y);
+}
+```
+
+`ref` and `&` do the same thing—they create references. The difference is **when** you apply borrowing:
+
+- **`&optional_point`** — Borrow *before* the pattern (outside destructuring)
+- **`ref p`** — Borrow *during* the pattern (inside destructuring)
+
+Both are equivalent:
+
+```rust
+// These two are the same
+if let Some(ref p) = optional_point { ... }
+if let Some(p) = &optional_point { ... }
+```
+
+**When to use `ref`:** When you're already pattern matching and you want to make it explicit that you're borrowing at the destructuring site. It's more idiomatic than adding `&` before the whole value, especially with complex patterns or multiple match arms.
+
+**Why Options matter:**
+
+- **Prevent null reference errors** — You can't accidentally forget to handle "no value" because the compiler forces you
+- **Self-documenting code** — If a function returns `Option<u16>`, readers instantly know "this might return nothing"
+- **Universal pattern** — Used everywhere: function return values, struct fields, API responses
+
+**Real-world example:**
+
+```rust
+fn maybe_ice_cream(hour_of_day: u16) -> Option<u16> {
+    // This function MIGHT have an answer (Some value)
+    // Or MIGHT NOT (None if hour is invalid)
+
+    if hour_of_day > 23 {
+        None  // Invalid hour — no answer exists
+    } else if hour_of_day >= 22 {
+        Some(0)  // Valid hour — fridge is empty
+    } else {
+        Some(5)  // Valid hour — 5 scoops available
+    }
+}
+
+// Call it and handle the result:
+let result = maybe_ice_cream(12);  // Returns Some(5)
+```
+
+**Common use cases:**
+
+| Scenario | Using Option |
+|----------|--------------|
+| Function may fail | `fn find_user(id: u32) -> Option<User>` |
+| Optional struct field | `struct Person { email: Option<String> }` |
+| Partial function | `fn divide(a, b) -> Option<f64>` (None if b == 0) |
+| Searching collections | `vec.get(index)` returns `Option<&T>` |
+
+---
+
+## Extracting Values from Option: `.unwrap()`, Pattern Matching, and `if let`
+
+**The Challenge:**
+
+When you have an `Option<u16>`, you can't directly use it as a `u16`. You must first extract (or **unwrap**) the value inside.
+
+```rust
+let result = maybe_ice_cream(12);  // Type: Option<u16> (either Some(5) or None)
+assert_eq!(result, 5);  // ❌ ERROR! Can't compare Option<u16> to u16
+```
+
+**Method 1: `.unwrap()` — Fast but dangerous**
+
+```rust
+let result = maybe_ice_cream(12).unwrap();  // Extracts the value
+assert_eq!(result, 5);  // ✓ Works — result is now u16
+```
+
+**How it works:**
+
+- If `result` is `Some(5)`, `.unwrap()` extracts `5`
+- If `result` is `None`, `.unwrap()` panics (crashes the program)
+
+**When to use:** Only when you're **certain** the Option contains `Some`. Using it recklessly is a code smell—the compiler warns against it.
+
+---
+
+**Method 2: Pattern Matching with `match` — Explicit and Safe**
+
+```rust
+let result = maybe_ice_cream(12);
+
+match result {
+    Some(value) => {
+        // Handle the "value exists" case
+        println!("Got {} scoops", value);
+        assert_eq!(value, 5);
+    }
+    None => {
+        // Handle the "no value" case
+        panic!("No ice cream!");
     }
 }
 ```
 
-Other numeric types: `u8` (0–255, like RGB), `u32` (general), `i32` (negative allowed).
+**Why this is better:**
 
-**Key insight:** Functional patterns (closures, `.map()`, `.collect()`) combined with enum extraction create the most idiomatically Rust code. But pay attention to type details—especially `&` for borrowing and understanding what type each method returns.
+- **Exhaustive** — Rust forces you to handle BOTH cases
+- **Explicit** — Anyone reading the code sees you considered both possibilities
+- **Safe** — No silent failures
+
+**Real-world example in a function:**
+
+```rust
+fn report_ice_cream(hour: u16) {
+    let amount = maybe_ice_cream(hour);
+
+    match amount {
+        Some(scoops) => println!("We have {} scoops", scoops),
+        None => println!("Invalid hour!"),
+    }
+}
+```
+
+---
+
+**Method 3: `if let` — Cleaner for Single Cases**
+
+When you only care about the `Some` case and want to ignore `None`:
+
+```rust
+let result = maybe_ice_cream(12);
+
+if let Some(value) = result {
+    println!("Got {} scoops", value);
+    assert_eq!(value, 5);
+}
+// If result was None, this block is skipped silently
+```
+
+**Reading `if let` intuitively:**
+
+- `if let Some(value) = result` reads as: "If result matches the pattern `Some(value)`, extract it and call it `value`"
+- It's syntactic sugar for: "I only care about the Some case; None is fine, just skip it"
+
+**When to use `if let`:**
+
+- You're confident the Option will be `Some`
+- You don't need to do anything special if it's `None`
+- Your code is simpler and more readable
+
+---
+
+**Comparison: When to use each**
+
+| Situation | Tool | Example |
+|-----------|------|---------|
+| Confident it's Some | `.unwrap()` | `let x = vec.first().unwrap();` |
+| Must handle both cases | `match` | `match find_user(id) { Some(u) => {...}, None => {...} }` |
+| Only care about Some | `if let` | `if let Some(user) = find_user(id) { ... }` |
+| Default fallback | `.unwrap_or()` | `amount.unwrap_or(0)` |
+
+---
+
+## `while let` — Looping Until `None`
+
+`while let` is `if let` applied to a loop. It repeats while the pattern matches:
+
+```rust
+let mut stack = vec![1, 2, 3];
+
+while let Some(value) = stack.pop() {
+    println!("Popped: {}", value);  // Runs while pop() returns Some
+}
+// When stack is empty, pop() returns None, loop exits
+```
+
+**How it works:**
+
+1. `stack.pop()` returns `Some(value)` → enter loop, execute body
+2. `stack.pop()` returns `None` → exit loop
+
+**Real-world use case:**
+
+```rust
+let mut numbers = vec![10, 20, 30];
+
+while let Some(n) = numbers.pop() {
+    println!("Processing: {}", n);
+}
+
+// Output:
+// Processing: 30
+// Processing: 20
+// Processing: 10
+```
+
+**Why not use a regular loop?**
+
+```rust
+// Without while let (verbose)
+loop {
+    match stack.pop() {
+        Some(value) => println!("Popped: {}", value),
+        None => break,
+    }
+}
+
+// With while let (cleaner)
+while let Some(value) = stack.pop() {
+    println!("Popped: {}", value);
+}
+```
+
+---
+
+## Summary: if let vs while let
+
+| Pattern | Where | Reads As | Use Case |
+|---------|-------|----------|----------|
+| `if let Some(x) = option` | Conditional | "If this matches, do this" | One-time check |
+| `while let Some(x) = iterator` | Loop | "While this keeps matching, keep looping" | Consuming iterators until they're done |
+
+**Both are syntactic sugar:**
+
+- `if let` = simplified `match` (when you only care about one variant)
+- `while let` = simplified `loop + match` (when you want to loop while a pattern matches)
+
+**Real-world combined example:**
+
+```rust
+fn process_options(mut options: Vec<Option<i32>>) {
+    // Loop while we can pop Some values
+    while let Some(opt) = options.pop() {
+        // Handle the Option we popped
+        if let Some(number) = opt {
+            println!("Number: {}", number);
+        } else {
+            println!("None!");
+        }
+    }
+}
+```
+
+---
+
+**Key insights on Options:**
+
+1. **Option is just an enum** — `Some(T)` and `None` are its two variants
+2. **Type inference handles the `<T>`** — When you return `Some(5)`, Rust infers `Some::<u16>(5)` from context
+3. **Extraction happens at use time** — You decide how to handle it: `.unwrap()`, `match`, or `if let`
+4. **`if let` + `while let` are convenience syntax** — They're not special, just cleaner ways to write `match`
+5. **Options force correctness** — The compiler won't let you forget the `None` case (that's the whole point!)
+
+---
+
+## Result: Handling Recoverable Errors
+
+**What is a Result?**
+
+`Result` is a **built-in enum** (like `Option`) that represents "an operation that might succeed or fail." Every `Result` is either `Ok(value)` or `Err(error)`:
+
+```rust
+enum Result<T, E> {
+    Ok(T),      // Success: contains a value of type T
+    Err(E),     // Error: contains an error of type E
+}
+```
+
+**TypeScript vs Rust error handling:**
+
+| TypeScript | Rust |
+|-----------|------|
+| `throw new Error("message")` | `Err("message".to_string())` |
+| `try/catch` block | `match`, `if let`, or `?` operator |
+| Error handling is optional | **Compiler forces** you to handle errors |
+
+**Real-world example:**
+
+```rust
+fn parse_quantity(item_quantity: &str) -> Result<i32, String> {
+    match item_quantity.parse::<i32>() {
+        Ok(qty) => {
+            if qty <= 0 {
+                Err("Quantity must be positive".to_string())
+            } else {
+                Ok(qty)
+            }
+        }
+        Err(e) => Err(format!("Invalid number: {}", e)),
+    }
+}
+```
+
+Here:
+- **Success** (`Ok`) returns the parsed `i32`
+- **Failure** (`Err`) returns a `String` error message
+
+**Key insight:** `Result` doesn't crash your program like exceptions do. Instead, it returns the error as a value that **must** be handled by the caller.
+
+---
+
+## The `?` Operator: Error Propagation Shorthand
+
+The `?` operator automatically extracts the success value or returns the error:
+
+```rust
+// With ? operator (short)
+let qty = item_quantity.parse::<i32>()?;
+
+// Without ? operator (what it expands to)
+let qty = match item_quantity.parse::<i32>() {
+    Ok(value) => value,
+    Err(e) => return Err(e),
+};
+```
+
+**How it works:**
+
+- If the operation succeeds (`Ok`), `?` extracts the value and keeps going
+- If it fails (`Err`), `?` immediately returns that error from the function
+
+**Critical constraint:** The `?` operator only works when error types match:
+
+```rust
+fn total_cost(item_quantity: &str) -> Result<i32, ParseIntError> {
+    let qty = item_quantity.parse::<i32>()?;  // ✓ Works — error type matches
+    Ok(qty * 5 + 1)
+}
+
+fn total_cost_string(item_quantity: &str) -> Result<i32, String> {
+    let qty = item_quantity.parse::<i32>()?;  // ❌ Fails — ParseIntError ≠ String
+    Ok(qty * 5 + 1)
+}
+```
+
+To fix the mismatch, convert the error type:
+
+```rust
+fn total_cost_string(item_quantity: &str) -> Result<i32, String> {
+    let qty = item_quantity.parse::<i32>()
+        .map_err(|e| e.to_string())?;  // Convert ParseIntError to String
+    Ok(qty * 5 + 1)
+}
+```
+
+**When to use `?`:**
+
+- You want to propagate errors up to the caller
+- Error types match your function's return type
+- You don't need custom error handling in this function
+
+**When to use `match`:**
+
+- You need to handle different error cases differently
+- You want to add custom context or messages
+- Error types don't match (and you don't want to convert)
+
+**Key insight:** The `?` operator is **not a new concept**—it's syntactic sugar for "if this fails, bail out now and let the caller handle it." It's the most common error handling pattern in Rust.
+
+---
+
+## Pattern Matching: `match` vs `=>`
+
+**The `=>` operator in Rust is NOT the same as TypeScript's arrow function!**
+
+| Language | Syntax | Meaning |
+|----------|--------|---------|
+| **TypeScript** | `(x) => x * 2` | Arrow function (anonymous function) |
+| **Rust** | `pattern => expression` | Pattern match arm (if pattern matches, execute this) |
+
+**Rust also has anonymous functions (closures), but uses different syntax:**
+
+```rust
+// Rust CLOSURE (similar to TypeScript arrow function)
+let double = |x| x * 2;  // Uses |x|, not =>
+
+// Rust PATTERN MATCH (uses =>)
+match some_value {
+    Ok(x) => println!("Success: {}", x),    // if pattern matches, do this
+    Err(e) => println!("Error: {}", e),
+}
+```
+
+**Why the confusion?**
+
+The `=>` looks like TypeScript's `=>`, but it serves a completely different purpose:
+
+- **TypeScript `=>`** → Creates a function
+- **Rust `=>`** → Matches a pattern and executes code for that pattern
+
+**In pattern matching, the `=>` is part of the destructuring syntax:**
+
+```rust
+match result {
+    Ok(qty) => {
+        // qty is EXTRACTED from Ok during the match
+        // => says "if this pattern matched, execute this block"
+        println!("Quantity: {}", qty)
+    }
+    Err(e) => {
+        // e is EXTRACTED from Err during the match
+        println!("Error: {}", e)
+    }
+}
+```
+
+The pattern (`Ok(qty)`, `Err(e)`) defines what to extract. The `=>` says "if this pattern matches, what happens next."
+
+**Key insight:** Rust's `=>` is pattern matching syntax, not function syntax. It combines destructuring (extracting values from enums) with conditional logic all in one expression.
+
+---
+
+## `impl` Blocks: Attaching Methods to Types
+
+**What is `impl`?**
+
+`impl` stands for "implementation." It's Rust's way of attaching behavior (methods and associated functions) to a type. Think of it like an instruction manual for how to use that type.
+
+```rust
+struct PositiveNonzeroInteger(u64);
+
+impl PositiveNonzeroInteger {
+    fn new(value: i64) -> Result<Self, CreationError> {
+        // Method implementation
+    }
+}
+```
+
+**Key distinction: Rust separates data from behavior**
+
+In TypeScript, data and methods are locked together in a class:
+
+```typescript
+// TypeScript: data and methods together
+class PositiveNonzeroInteger {
+  value: number;
+  constructor(value: number) { /* ... */ }
+}
+```
+
+In Rust, they're separate:
+
+```rust
+// Rust: data in struct, behavior in impl
+struct PositiveNonzeroInteger(u64);
+
+impl PositiveNonzeroInteger {
+    fn new(value: i64) -> Result<Self, CreationError> { /* ... */ }
+}
+```
+
+This separation gives you flexibility—you can add methods to types in different parts of your codebase, or even in different files.
+
+**Associated functions vs methods:**
+
+- **Associated functions** (no `self`) — Belong to the type itself, called with `::`
+  ```rust
+  PositiveNonzeroInteger::new(10)  // Called on the TYPE
+  ```
+
+- **Methods** (have `&self`, `&mut self`, or `self`) — Belong to instances, called with `.`
+  ```rust
+  instance.get_value()  // Called on an INSTANCE
+  ```
+
+**Key insight:** `impl` is just an organizational tool. It says "here's the behavior for this type." The compiler doesn't care if you have one `impl` block or multiple—they all get merged together.
+
+---
+
+## `Self` — The Type Alias Inside `impl`
+
+**What is `Self`?**
+
+`Self` (capital S) is a **type alias** that means "the type I'm implementing this for." Inside an `impl` block, `Self` automatically refers to the type being implemented.
+
+```rust
+impl PositiveNonzeroInteger {
+    fn new(value: i64) -> Result<Self, CreationError> {
+        //                              ↑
+        //                    Self = PositiveNonzeroInteger
+        Ok(Self(value as u64))
+        //  ↑ Self again = PositiveNonzeroInteger
+    }
+}
+```
+
+**You could write it explicitly:**
+
+```rust
+fn new(value: i64) -> Result<PositiveNonzeroInteger, CreationError> {
+    if value > 0 {
+        Ok(PositiveNonzeroInteger(value as u64))
+    } else {
+        Err(CreationError::Invalid)
+    }
+}
+```
+
+But `Self` is cleaner and more maintainable. If you rename the type later, the method signature updates automatically.
+
+**`Self` vs `self` — don't confuse them:**
+
+| Keyword | Meaning | Example |
+|---------|---------|---------|
+| `Self` (capital) | The **type** being implemented | `fn new() -> Self` creates an instance |
+| `self` (lowercase) | An **instance** parameter (the object itself) | `fn get_value(&self)` borrows the instance |
+
+```rust
+impl Camera {
+    fn new() -> Self {
+        // Self = Camera (the type)
+        Camera { megapixels: 12 }
+    }
+
+    fn take_photo(&self) {
+        // self = an instance of Camera
+        // Self = Camera (the type) — but we don't use it here
+        println!("Photo taken at {} MP", self.megapixels);
+    }
+}
+```
+
+**Key insight:** `Self` is a permanent shorthand for "the type I'm attached to." It's not specific to return types—it can appear anywhere in the signature or body where you need to reference the type itself.
+
+---
+
+## Custom Error Types: `Result<T, E>` with Enums
+
+**Why custom error enums?**
+
+Instead of returning generic error strings like `"something went wrong"`, Rust lets you define **exactly which errors are possible** for an operation:
+
+```rust
+#[derive(PartialEq, Debug)]
+enum CreationError {
+    Negative,  // Error variant: "the value was negative"
+    Zero,      // Error variant: "the value was zero"
+}
+
+fn new(value: i64) -> Result<Self, CreationError> {
+    if value < 0 {
+        Err(CreationError::Negative)  // Specific error
+    } else if value == 0 {
+        Err(CreationError::Zero)      // Specific error
+    } else {
+        Ok(Self(value as u64))
+    }
+}
+```
+
+**Why this is better than string errors:**
+
+| Aspect | String Errors | Custom Enum |
+|--------|---------------|----|
+| **Type safety** | `"error"` is just a string | Compiler knows exactly which errors exist |
+| **Self-documenting** | Need to read code to see what errors are possible | Return type `Result<T, CreationError>` tells you instantly |
+| **Exhaustiveness** | Easy to miss handling some cases | `match` forces you to handle all variants |
+| **Pattern matching** | Have to do string comparisons | Can `match` on enum variants directly |
+
+**Example with `match`:**
+
+```rust
+match PositiveNonzeroInteger::new(-5) {
+    Ok(num) => println!("Success: {}", num.0),
+    Err(CreationError::Negative) => println!("Can't be negative!"),
+    Err(CreationError::Zero) => println!("Can't be zero!"),
+    // Rust forces you to handle BOTH error cases
+}
+```
+
+**Key insight:** Custom error enums are about **precision and exhaustiveness**. They make your code self-documenting and force the compiler to ensure you handle all possible failure modes. This is one of Rust's strongest safety features.
+
+---
+
+## Error Handling: From Simple to Complex
+
+**The Simple Version (what you're doing now):**
+
+When a function can fail, it returns a `Result`. Simple as that.
+
+```rust
+fn parse_number(input: &str) -> Result<i32, ParseIntError> {
+    input.parse::<i32>()
+}
+```
+
+This says: "I'll either give you an `i32` or a `ParseIntError`."
+
+**What TypeScript does:**
+```typescript
+function parseNumber(input: string): number {
+    return parseInt(input);  // Returns NaN on failure, not an error object
+    // OR throws an exception
+}
+```
+
+Rust forces you to handle failure explicitly. TypeScript lets you ignore it (which causes bugs).
+
+---
+
+## When Things Get Complex: Multiple Error Sources
+
+**The Problem:**
+
+Sometimes one function can fail in *multiple different ways*, and those errors come from different places:
+
+```rust
+fn parse(s: &str) -> Result<PositiveNonzeroInteger, ???> {
+    // Could fail here with ParseIntError (from Rust std library)
+    let x: i64 = s.parse()?;
+
+    // Could fail here with CreationError (YOUR error type)
+    PositiveNonzeroInteger::new(x)?
+}
+```
+
+**What error type should we use?** Can't use `ParseIntError` because creation might fail. Can't use `CreationError` because parsing might fail.
+
+---
+
+## The Solution: Wrap Everything in One Enum
+
+You create an **enum that can hold either error type**:
+
+```rust
+enum ParsePosNonzeroError {
+    ParseInt(ParseIntError),   // Parsing failed (from stdlib)
+    Creation(CreationError),   // Validation failed (your error)
+}
+```
+
+Think of it like **two different boxes** you can put errors in:
+- Box A (ParseInt): holds parsing errors
+- Box B (Creation): holds validation errors
+
+When something fails, you put the error in the right box and return it:
+
+```rust
+fn parse(s: &str) -> Result<PositiveNonzeroInteger, ParsePosNonzeroError> {
+    let x: i64 = s.parse()
+        .map_err(ParsePosNonzeroError::ParseInt)?;  // Put error in Box A
+
+    PositiveNonzeroInteger::new(x)
+        .map_err(ParsePosNonzeroError::Creation)    // Put error in Box B
+}
+```
+
+---
+
+## What's `.map_err()`?
+
+`.map_err()` says: **"If this fails, transform the error before returning it."**
+
+```rust
+result.map_err(SomeFunction)
+```
+
+Expands to:
+
+```rust
+match result {
+    Ok(value) => Ok(value),           // Success: leave it alone
+    Err(error) => Err(SomeFunction(error))  // Error: transform it
+}
+```
+
+**Example:**
+```rust
+// I have: Result<i64, ParseIntError>
+// I need: Result<i64, ParsePosNonzeroError>
+
+s.parse::<i64>()
+    .map_err(ParsePosNonzeroError::ParseInt)
+    // Now it's Result<i64, ParsePosNonzeroError>
+```
+
+---
+
+## Why Is This Necessary?
+
+**For small programs?** Not really. You could just use `Box<dyn Error>` (errors5.rs):
+
+```rust
+fn parse(s: &str) -> Result<PositiveNonzeroInteger, Box<dyn Error>> {
+    let x: i64 = s.parse()?;
+    PositiveNonzeroInteger::new(x).map_err(|e| Box::new(e) as Box<dyn Error>)
+}
+```
+
+Much simpler!
+
+**For library code?** Essential. Your caller needs to know:
+- *What* can go wrong
+- *Which* type of error occurred
+- How to handle each error differently
+
+```rust
+match parse(input) {
+    Ok(num) => println!("Success: {}", num.0),
+    Err(ParsePosNonzeroError::ParseInt(e)) => {
+        // Handle parsing failure specifically
+        println!("That's not a number: {}", e);
+    }
+    Err(ParsePosNonzeroError::Creation(e)) => {
+        // Handle validation failure specifically
+        println!("Number must be positive: {:?}", e);
+    }
+}
+```
+
+Your caller can distinguish between "bad input format" and "valid format but wrong value."
+
+---
+
+## Rust vs TypeScript: Error Handling Philosophy
+
+| Aspect | TypeScript | Rust |
+|--------|-----------|------|
+| **How you signal failure** | `throw` exception or return `null` | Return `Result` or `Option` |
+| **Is it optional?** | Yes (you can ignore errors) | **No** (compiler forces you) |
+| **How you handle failure** | `try/catch` or check for `null` | `match`, `if let`, or `?` |
+| **Type safety** | Lose type info in catch block | Each error type is explicit |
+| **Combining errors** | Both are just `Error` objects | Must create wrapper enum |
+
+**TypeScript example (error handling is optional):**
+```typescript
+try {
+    const x = parseInt(input);
+    const result = validatePositive(x);
+    console.log(result);
+} catch (e) {
+    // Maybe error, maybe not—you decided to catch it
+    console.error(e);
+}
+```
+
+**Rust equivalent (error handling is mandatory):**
+```rust
+match input.parse::<i64>() {
+    Ok(x) => match PositiveNonzeroInteger::new(x) {
+        Ok(result) => println!("{:?}", result),
+        Err(e) => println!("Validation failed: {:?}", e),
+    }
+    Err(e) => println!("Parse failed: {}", e),
+}
+
+// OR with ? (cleaner)
+let x: i64 = input.parse()?;
+let result = PositiveNonzeroInteger::new(x)?;
+println!("{:?}", result);
+```
+
+---
+
+## The `?` Operator: Your New Best Friend
+
+Instead of writing `match` everywhere, use `?`:
+
+```rust
+// Verbose (what ? does internally)
+let x: i64 = match input.parse::<i64>() {
+    Ok(value) => value,
+    Err(e) => return Err(e),  // Stop and return error immediately
+};
+
+// Clean (what ? does)
+let x: i64 = input.parse::<i64>()?;  // Same thing!
+```
+
+`?` means: **"If this fails, return the error now. Otherwise, extract the value and keep going."**
+
+The catch: `?` only works in functions that return `Result` or `Option`.
+
+---
+
+## When to Use Each Pattern
+
+| Situation | Use | Example |
+|-----------|-----|---------|
+| **Single error type** | Just that error | `Result<T, CreationError>` |
+| **Multiple error types, library code** | Wrapper enum | `Result<T, ParsePosNonzeroError>` |
+| **Multiple error types, small code** | `Box<dyn Error>` | `Result<T, Box<dyn Error>>` |
+| **Just need a value or nothing** | `Option<T>` | `Option<u64>` |
+
+---
+
+## Key Insights
+
+1. **Rust makes error handling explicit** — You can't accidentally ignore errors like in TypeScript
+2. **Each error type matters** — The compiler knows what can fail and forces you to handle it
+3. **Multiple errors need a wrapper** — Create an enum to unify different error sources
+4. **`?` is your shortcut** — Instead of writing `match` everywhere, use `?` to propagate errors
+5. **It's worth the complexity** — Your code becomes more reliable because the compiler catches edge cases
+
+This is why Rust programs are generally more reliable than TypeScript—**you're forced to think about failure cases** instead of hoping they don't happen.

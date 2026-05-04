@@ -4,8 +4,9 @@ trait AppendBar {
     fn append_bar(self) -> Self;
 }
 
-impl AppendBar for String {
+impl<T> AppendBar<T> for String {
     // TODO: Implement `AppendBar` for the type `String`.
+    String::append_bar<T>
 }
 
 fn main() {
